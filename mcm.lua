@@ -16,18 +16,9 @@ local function getHerbalismObjects()
     return list
 end
 
-local function showVolumeAsPercentage(self)
+local function setSliderLabelAsPercentage(self)
     self.elements.sliderValueLabel.text = (": " .. self.elements.slider.widget.current + self.min .. "%")
 end
-
-local function getVolumeAsInteger(self)
-    return math.round(config.volume * 100)
-end
-
-local function setVolumeAsDecimal(self, value)
-    config.volume = math.round(value / 100, 2)
-end
-
 
 return {
     name = "Graphic Herbalism",
@@ -50,6 +41,26 @@ return {
                                 table = config,
                             },
                         },
+                        {
+                            label = "with Show ingredient tooltips enabled, show ingredient names if not same as container",
+                            class = "OnOffButton",
+                            description = "With Show ingredient tooltips Enabled, show ingredient names if different than container\n\nThis optioncontrols whether or not ingredient names are shown, in addition to the container name, when not the same.\n\nDefault: On\n\n",
+                            variable = {
+                                id = "showIngrNameIfNotSameAsCont",
+                                class = "TableVariable",
+                                table = config,
+                            },
+                        },
+                        {
+                            label = "Show picked tooltips",
+                            class = "OnOffButton",
+                            description = "Show picked tooltips\n\nThis option controls whether or not picked tooltips will be shown.\n\nDefault: On\n\n",
+                            variable = {
+                                id = "showPicked",
+                                class = "TableVariable",
+                                table = config,
+                            },
+                        },
                     },
                 },
                 {
@@ -61,12 +72,12 @@ return {
                             class = "Slider",
                             description = "Pick Volume Description",
                             variable = {
-                                class = "Variable",
-                                get = getVolumeAsInteger,
-                                set = setVolumeAsDecimal,
+                                id = "volume",
+                                class = "TableVariable",
+                                table = config,
                             },
-                            postCreate = showVolumeAsPercentage,
-                            updateValueLabel = showVolumeAsPercentage,
+                            postCreate = setSliderLabelAsPercentage,
+                            updateValueLabel = setSliderLabelAsPercentage,
                         },
                     },
                 },

@@ -1,6 +1,9 @@
 --[[
     Graphic Herbalism v1.0
     By Greatness7
+      lightly modified by sveng (config.lua and mcm.lua, too)
+      - added name plural support, "harvest" verb alternatives, "picked" tooltip option, ingred name tooltip option
+      all changes wrapped in -- sveng edit begin/end
 --]]
 
 -- Make sure we have an up-to-date version of MWSE.
@@ -30,17 +33,20 @@ event.register("initialized", function()
     GUI_ID[2] = tes3ui.registerID("GH_Tooltip_Effect2")
     GUI_ID[3] = tes3ui.registerID("GH_Tooltip_Effect3")
     GUI_ID[4] = tes3ui.registerID("GH_Tooltip_Effect4")
+-- sveng edit begin (showPicked)
+    GUI_ID.picked = tes3ui.registerID("GH_Tooltip_Picked")
+-- sveng edit end (showPicked)
 end)
 
 
 -- Detect if the reference is a valid herbalism subject.
 local function isHerb(ref)
-    local obj = ref and ref.object
-    if obj and obj.organic then
-        local id = (obj.baseObject or obj).id:lower()
+    if ref and ref.object.organic then
+        local object = ref.object.baseObject or ref.object
+        local id = object.id:lower()
         if config.blacklist[id] then return false end
         if config.whitelist[id] then return true end
-        return (obj.script == nil)
+        return (ref.object.script == nil)
     end
     return false
 end
@@ -78,26 +84,19 @@ end
 
 
 -- Calls "updateHerbReferences" when a new cell is loaded.
-local currentCells
+local dayCellWasLoaded
 local function onCellChanged()
-    local cells = tes3.getActiveCells()
     local today = tes3.getGlobal("DaysPassed")
-
-    for i, cell in ipairs(cells) do
-        local day = currentCells[cell]
-        if today > (day or 0) then
+    for i, cell in ipairs(tes3.getActiveCells()) do
+        if today > (dayCellWasLoaded[cell] or 0) then
+            dayCellWasLoaded[cell] = today
             updateHerbReferences(cell)
-            cells[cell] = today
-        else -- cell is already loaded
-            cells[cell] = day
         end
     end
-
-    currentCells = cells
 end
 event.register("cellChanged", onCellChanged)
 event.register("calcRestInterrupt", onCellChanged)
-event.register("loaded", function() currentCells = {}; onCellChanged() end)
+event.register("loaded", function() dayCellWasLoaded = {}; onCellChanged() end)
 
 
 -- Called when picking a herb, trigger theft if necessary.
@@ -113,11 +112,95 @@ local function reportTheft(ref, value)
     tes3.triggerCrime{type=tes3.crimeType.theft, victim=owner, value=value}
 end
 
+-- sveng edit begin (helper functions)
+    local function stringMatchTableSubstring(string, table)
+       for i = 1, #table do
+          if string.find(string, table[i][1]) ~= nil then
+             return table[i][2]
+          end
+       end
+       return nil
+    end
+    local function getPickVerb(ingredObject, containerObject)
+       local pickVerb = nil
+       if ingredObject ~= nil then 
+          pickVerb = stringMatchTableSubstring(string.lower(ingredObject.name), config.pickVerbNameStubList)
+       end
+       if pickVerb == nil then
+          pickVerb = stringMatchTableSubstring(string.lower(containerObject.id), config.pickVerbIdStubList)
+       end
+       return pickVerb
+    end
+    local function getPickBaseObject(object)
+       local baseObject = object.baseObject or object
+       for _, stack in pairs(baseObject.inventory) do
+       	   local item = stack.object
+      	   if item.objectType == tes3.objectType.leveledItem then
+	      for i = 1, 15 do 
+	         local pick = item:pickFrom()
+	         if pick ~= nil then return pick end
+	      end
+	      return object
+	   end
+       end
+       return nil
+    end
+    local function toPlural(String)
+        local string = string.lower(String)
+	-- two ingredient special cases covered	
+	if string.find(string, "foot$") ~= nil then
+	   return string.sub(String, 1, string.len(string) - 3) .. "eet"
+	elseif string.find(string, "tooth$") ~= nil then
+	   return string.sub(String, 1, string.len(string) - 4) .. "eeth"
+	elseif string.find(string, "fungus$") ~= nil then
+	   return string.sub(String, 1, string.len(string) - 2) .. "i"
+	-- general rules following https://www.grammar.cl/Notes/Plural_Nouns.htm
+	elseif string.find(string, "s$") then
+	   return String .. "es"
+        elseif string.find(string, "[sc]h$") then
+	   return String .. "es"
+        elseif string.find(string, "[xz]$") then
+	   return String .. "es"
+        elseif string.find(string, "f$") then
+	   return string.sub(String, 1, string.len(string) - 1) .. "ves"
+        elseif string.find(string, "fe$") then
+	   return string.sub(String, 1, string.len(string) - 2) .. "ves"
+        elseif string.find(string, "[aeiou]y$") then
+        elseif string.find(string, "y$") then
+	   return string.sub(String, 1, string.len(string) - 1) .. "ies"
+        elseif string.find(string, "[aeiou]o$") then
+        elseif string.find(string, "o$") then
+	   return string.sub(String, 1, string.len(string) - 1) .. "es"
+	end
+	return String .. "s"
+    end
+    local function ingredNameForQuantity(ingredObject, containerObject, quantity)
+    -- note: exceptions are geared toward ingredient names only
+       local quantityName = stringMatchTableSubstring(string.lower(containerObject.id), config.pluralQuantityIdStubList)
+       if quantityName == nil then
+          quantityName = stringMatchTableSubstring(string.lower(ingredObject.name), config.pluralQuantityNameStubList)
+       end
+       if quantityName ~= nil then -- plurual treatment 
+	  if quantity > 1 then
+	     return toPlural(quantityName).. " of " .. ingredObject.name
+	  end
+	  return quantityName .. " of " .. ingredObject.name
+       else
+       -- not plural object
+          if quantity > 1 then
+	     return toPlural(ingredObject.name)
+	  end
+          return ingredObject.name
+       end
+    end
+-- sveng edit end (helper functions)
 
 -- Called when activating a herb, loot all contents and update switch node.
+   
 local function onActivate(e)
+    
     local ref = e.target
-
+ 
     -- skip non-ingred
     if not isHerb(ref) then return end
 
@@ -132,31 +215,35 @@ local function onActivate(e)
 
     -- transfer ingreds
     if #ref.object.inventory == 0 then
-        tes3.messageBox("You failed to harvest anything of value.")
-        tes3.playSound{reference=ref, sound="Item Ammo Down", volume=config.volume, pitch=0.9}
+-- sveng edit begin (pickVerb)
+        local pickBaseObject = getPickBaseObject(ref.object)
+    	local pickVerb = getPickVerb(pickBaseObject, ref.object.baseObject or ref.object)
+        tes3.messageBox("You failed to %s anything of value.", pickVerb)
+-- sveng edit end (pickVerb)
+        tes3.playSound{reference=ref, sound="Item Ammo Down", volume=(config.volume * 0.01), pitch=0.9}
         updateHerbalismSwitch(ref, 2)
     else
         for i, stack in pairs(ref.object.inventory) do
             if stack.object.canCarry ~= false then
                 value = value + (stack.object.value * stack.count)
-                tes3.messageBox("You harvested %s %s.", stack.count, stack.object.name)
+-- sveng edit begin (pick verb and name plural)
+    	        local pickVerb = getPickVerb(stack.object, ref.object)
+                tes3.messageBox("You %sed %s %s.", pickVerb, stack.count, ingredNameForQuantity(stack.object, ref.object, stack.count))
+-- sveng edit end (pick verb and name plural)
                 tes3.transferItem{from=ref, to=tes3.player, item=stack.object, count=stack.count, playSound=false}
             end
         end
-        tes3.playSound{reference=ref, sound="Item Ingredient Up", volume=config.volume, pitch=1.0}
+        tes3.playSound{reference=ref, sound="Item Ingredient Up", volume=(config.volume * 0.01), pitch=1.0}
         updateHerbalismSwitch(ref, 1)
     end
 
     -- detect if stolen
     reportTheft(ref, value)
 
-    -- apply empty flag
-    ref.isEmpty = true
-
     -- claim this event
     return false
 end
-event.register("activate", onActivate, {priority=200})
+event.register("activate", onActivate, {priority=1})
 
 
 -- Iterate over an inventory's ingredients, including inside leveled lists.
@@ -204,20 +291,35 @@ end
 local function onTooltipDrawn(e)
     local ref = e.reference
 
-    -- config override
-    if not config.showTooltips then return end
-
     -- skip non-ingred
     if not isHerb(ref) then return end
 
+-- sveng edit begin (showPicked)
+    if ref.data.GH and config.showPicked then
+       local pickObject = getPickBaseObject(ref.object)
+       local pickVerb = getPickVerb(pickObject, ref.object)
+       pickVerb = config.pickedVerb[pickVerb] or pickVerb
+       pickVerb = pickVerb:gsub("^%l", string.upper)
+       local pickedLabel = e.tooltip:getContentElement():createLabel{ text = "(" .. pickVerb .. "ed)", id = GUI_ID.picked }
+--       e.tooltip:getContentElement():updateLayout()
+    end
+-- sveng edit end (showPicked)
+
+    -- config override
+    if not config.showTooltips then return end
+    
     -- block quickloot
     quickloot.skipNextTarget = true
 
-    -- skip pre-picked
     if ref.data.GH then
-        e.tooltip.maxWidth = 0
-        e.tooltip.maxHeight = 0
-        return false
+-- sveng edit begin (showPicked)    
+       if config.showPicked == false then
+          e.tooltip.maxWidth = 0
+          e.tooltip.maxHeight = 0
+          return false
+       end
+       return
+-- sveng edit end (showPicked)    
     end
 
     -- display effects
@@ -229,6 +331,15 @@ local function onTooltipDrawn(e)
         parent.childAlignX = 0.5
         parent.autoHeight = true
         parent.autoWidth = true
+
+-- sveng edit begin (show ingredient name if not same as parent)
+        if config.showIngrNameIfNotSameAsCont
+	and ref.object.name ~= ingred.name then
+           local label = parent:createLabel{id=GUI_ID.name, text="\n" .. ingred.name}
+           label.wrapText = true
+--	   label.color = tes3ui.getPalette("header_color")
+	end
+-- sveng edit end (show ingredient name if not same as ingred)
 
         local label = parent:createLabel{id=GUI_ID.weight, text=string.format("Weight: %.2f", ingred.weight)}
         label.wrapText = true
@@ -292,10 +403,11 @@ event.register("modConfigReady", registerModConfig)
 -- Autodetect blacklist candidates. Not perfect, but is better than nothing.
 local function updateBlacklist()
     for obj in tes3.iterateObjects(tes3.objectType.container) do
-        local id = obj.id:lower()
-        if (obj.organic
-            and obj.script == nil
-            and #obj.inventory > 0
+        local object = obj.baseObect or obj
+        local id = object.id:lower()
+        if (object.organic
+            and object.script == nil
+            and #object.inventory > 0
             and config.blacklist[id] == nil
             and config.whitelist[id] == nil
             )
@@ -304,6 +416,12 @@ local function updateBlacklist()
                 or id:find("chest")
                 or id:find("crate")
                 or id:find("sack")
+-- sveng edit begin (add generic exceptions)
+                or id:find("trader") -- az_cont_trader_
+                or id:find("NOM_") -- NOM_
+                or id:find("basket_") -- NOM_basket
+                or id:find("box_") -- NOM_box
+-- sve edit end (add generic exceptions)
                 or getIngredients(obj.inventory)() == nil)
             then
                 mwse.log('[Graphic Herbalism] Invalid container "%s" added to blacklist.', id)
